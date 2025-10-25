@@ -345,49 +345,34 @@ IMPORTANT INSTRUCTIONS:
       { text: prompt }
     ]);
 
-    console.log("========== GEMINI RAW RESPONSE ==========");
     const response = result.response;
-    console.log("Full response object:", JSON.stringify(response, null, 2));
-    
     const text = response.text();
-    console.log("========== GEMINI TEXT OUTPUT ==========");
-    console.log(text);
-    console.log("========== END GEMINI OUTPUT ==========");
 
     // Parse JSON safely
     try {
       const parsedData = JSON.parse(text);
-      console.log("✓ Successfully parsed JSON response");
-      console.log("Parsed data keys:", Object.keys(parsedData));
       
-      // Validate that we have some data
       if (!parsedData || typeof parsedData !== 'object') {
-        console.error("✗ Invalid response format - not an object");
         return { error: "Invalid response format" };
       }
       
-      console.log("✓ Returning parsed data to client");
       return parsedData;
     } catch (e) {
-      console.error("✗ JSON Parse Error:", e.message);
-      console.error("Raw text that failed to parse:", text);
+      console.error("JSON Parse Error:", e.message);
       
       // Try to extract partial JSON if possible
       try {
-        // Find the last complete JSON object before the error
         const lastBraceIndex = text.lastIndexOf('}');
         if (lastBraceIndex > 0) {
           const truncatedText = text.substring(0, lastBraceIndex + 1);
-          console.log("Attempting to parse truncated JSON...");
           const partialData = JSON.parse(truncatedText);
-          console.warn("⚠ Parsed truncated response due to token limit");
           return partialData;
         }
       } catch (partialError) {
-        console.error("Could not parse truncated JSON either");
+        // Could not parse truncated JSON either
       }
       
-      return { error: "Invalid or partial JSON response. Response may have been truncated due to size.", raw: text.substring(0, 500) + "..." };
+      return { error: "Invalid or partial JSON response. Response may have been truncated due to size." };
     }
   } catch (error) {
     console.error("Error analyzing label:", error);
@@ -407,13 +392,6 @@ exports.analyzeLabelImage = onRequest(
     cors: true
   },
   async (req, res) => {
-    console.log("========== NEW REQUEST ==========");
-    console.log("Method:", req.method);
-    console.log("Headers:", JSON.stringify(req.headers, null, 2));
-    console.log("Raw URL:", req.url);
-    console.log("Body type:", typeof req.body);
-    console.log("Has rawBody:", !!req.rawBody);
-    
     if (req.method !== "POST") {
       return res.status(405).json({
         success: false,
@@ -422,46 +400,35 @@ exports.analyzeLabelImage = onRequest(
     }
 
     const contentType = req.headers['content-type'] || req.headers['Content-Type'] || '';
-    console.log("Content-Type:", contentType);
     
     if (!contentType.includes('multipart/form-data')) {
       return res.status(400).json({
         success: false,
-        error: "Content-Type must be multipart/form-data. Current: " + contentType
+        error: "Content-Type must be multipart/form-data"
       });
     }
 
     // Manually collect the raw body data if not already available
-    console.log("Collecting request body...");
-    
     const getRawBody = () => {
       return new Promise((resolve, reject) => {
         if (req.rawBody) {
-          console.log("Using existing rawBody");
           resolve(req.rawBody);
           return;
         }
 
         const chunks = [];
-        let totalSize = 0;
-
         req.on('data', (chunk) => {
-          totalSize += chunk.length;
-          console.log(`Received chunk: ${chunk.length} bytes (total: ${totalSize})`);
           chunks.push(chunk);
         });
 
         req.on('end', () => {
-          console.log(`Request end: Total ${totalSize} bytes received`);
           resolve(Buffer.concat(chunks));
         });
 
         req.on('error', (err) => {
-          console.error("Request error:", err);
           reject(err);
         });
 
-        // Trigger reading if needed
         if (req.readable) {
           req.resume();
         }
@@ -471,7 +438,6 @@ exports.analyzeLabelImage = onRequest(
     let rawBodyBuffer;
     try {
       rawBodyBuffer = await getRawBody();
-      console.log("Raw body collected, size:", rawBodyBuffer.length);
     } catch (error) {
       console.error("Error collecting raw body:", error);
       return res.status(500).json({
@@ -488,8 +454,6 @@ exports.analyzeLabelImage = onRequest(
     }
 
     // Parse multipart form data using busboy
-    console.log("Creating Busboy instance...");
-    
     let busboy;
     try {
       busboy = Busboy({ 
@@ -499,7 +463,6 @@ exports.analyzeLabelImage = onRequest(
           files: 1
         }
       });
-      console.log("Busboy instance created successfully");
     } catch (error) {
       console.error("Error creating Busboy:", error);
       return res.status(500).json({
@@ -512,35 +475,24 @@ exports.analyzeLabelImage = onRequest(
     let fileMimeType = null;
     let fileName = null;
     let userId = null;
-    const fields = {};
-    let filesReceived = 0;
-    let fieldsReceived = 0;
 
     // Handle file upload
     busboy.on('file', (fieldname, file, info) => {
-      filesReceived++;
-      const { filename, encoding, mimeType } = info;
-      
-      console.log(`[FILE EVENT] Field: ${fieldname}, Filename: ${filename}, Encoding: ${encoding}, MimeType: ${mimeType}`);
+      const { filename, mimeType } = info;
 
       if (fieldname !== 'image') {
-        console.log(`Ignoring file field '${fieldname}' (expected 'image')`);
-        file.resume(); // Drain the stream
+        file.resume();
         return;
       }
 
       if (!mimeType.startsWith('image/')) {
-        console.log(`Rejecting non-image file: ${mimeType}`);
         file.resume();
         return;
       }
 
       const chunks = [];
-      let bytesReceived = 0;
       
       file.on('data', (data) => {
-        bytesReceived += data.length;
-        console.log(`Receiving file data: ${data.length} bytes (total: ${bytesReceived})`);
         chunks.push(data);
       });
 
@@ -548,23 +500,15 @@ exports.analyzeLabelImage = onRequest(
         fileBuffer = Buffer.concat(chunks);
         fileMimeType = mimeType;
         fileName = filename;
-        console.log(`[FILE END] Field: ${fieldname}, Total size: ${fileBuffer.length} bytes`);
-      });
-
-      file.on('limit', () => {
-        console.error('[FILE LIMIT] File size limit reached (10MB max)');
       });
 
       file.on('error', (err) => {
-        console.error('[FILE ERROR]', err);
+        console.error('File upload error:', err);
       });
     });
 
     // Handle form fields
     busboy.on('field', (fieldname, value) => {
-      fieldsReceived++;
-      console.log(`[FIELD EVENT] ${fieldname} = ${value}`);
-      fields[fieldname] = value;
       if (fieldname === 'userId') {
         userId = value;
       }
@@ -572,35 +516,17 @@ exports.analyzeLabelImage = onRequest(
 
     // Handle completion
     busboy.on('finish', async () => {
-      console.log(`[BUSBOY FINISH] Files received: ${filesReceived}, Fields received: ${fieldsReceived}`);
-      
       try {
         if (!fileBuffer) {
-          console.error("No file buffer found after busboy finish");
           return res.status(400).json({
             success: false,
-            error: `Image file is required. Received ${filesReceived} files and ${fieldsReceived} fields. Please upload an image using the 'image' field with multipart/form-data.`
+            error: "Image file is required. Please upload an image using the 'image' field with multipart/form-data."
           });
         }
 
-        console.log("✓ Processing label analysis request", {
-          userId: userId || "anonymous",
-          fileName: fileName,
-          fileSize: fileBuffer.length,
-          mimeType: fileMimeType,
-          timestamp: new Date().toISOString()
-        });
-
         const analysisResult = await analyzeLabel(fileBuffer, fileMimeType);
 
-        console.log("========== ANALYSIS RESULT ==========");
-        console.log("Result received from analyzeLabel:");
-        console.log(JSON.stringify(analysisResult, null, 2));
-        console.log("=====================================");
-
-        // Check if the result indicates an error from AI
         if (analysisResult.error) {
-          console.log("✗ Analysis returned an error:", analysisResult.error);
           return res.status(400).json({
             success: false,
             error: analysisResult.error,
@@ -608,10 +534,8 @@ exports.analyzeLabelImage = onRequest(
           });
         }
 
-        // Validate that we got meaningful data
         if (!analysisResult.ingredients || analysisResult.ingredients.length === 0) {
           if (!analysisResult.nutrition || analysisResult.nutrition.length === 0) {
-            console.log("✗ No meaningful data extracted (empty ingredients and nutrition)");
             return res.status(400).json({
               success: false,
               error: "Could not detect any ingredients or nutritional information. Please try again with a clearer image.",
@@ -620,18 +544,13 @@ exports.analyzeLabelImage = onRequest(
           }
         }
 
-        console.log("✓ Analysis successful - sending response to client");
-        console.log(`  - Ingredients: ${analysisResult.ingredients?.length || 0} items`);
-        console.log(`  - Nutrition: ${analysisResult.nutrition?.length || 0} items`);
-        console.log(`  - Product name: ${analysisResult.name || 'N/A'}`);
-        
         return res.status(200).json({
           success: true,
           data: analysisResult,
           error: null
         });
       } catch (error) {
-        console.error("[ERROR] Error analyzing image:", error);
+        console.error("Error analyzing image:", error);
         return res.status(500).json({
           success: false,
           error: error.message || "An error occurred while analyzing the image",
@@ -642,31 +561,23 @@ exports.analyzeLabelImage = onRequest(
 
     // Handle busboy errors
     busboy.on('error', (error) => {
-      console.error("[BUSBOY ERROR]", error.message);
-      console.error("Stack:", error.stack);
+      console.error("Busboy error:", error.message);
       return res.status(400).json({
         success: false,
         error: "File upload error: " + error.message
       });
     });
 
-    // Handle close event
-    busboy.on('close', () => {
-      console.log("[BUSBOY CLOSE] Stream closed");
-    });
-
     // Create a readable stream from the collected raw body buffer
-    console.log("Creating stream from raw body buffer...");
     const { Readable } = require('stream');
     const bufferStream = new Readable();
     bufferStream.push(rawBodyBuffer);
-    bufferStream.push(null); // Signal end of stream
+    bufferStream.push(null);
     
     try {
       bufferStream.pipe(busboy);
-      console.log("Buffer stream piped successfully to busboy");
     } catch (error) {
-      console.error("[PIPE ERROR]", error);
+      console.error("Pipe error:", error);
       return res.status(500).json({
         success: false,
         error: "Failed to process request: " + error.message
